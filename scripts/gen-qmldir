@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Regenerates Folio's qmldir: every .qml type by file name, singletons marked.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+{
+  find . -name '*.qml' -not -path './.git/*' -not -path './tests/*' | sort | while read -r f; do
+    f=${f#./}
+    name=$(basename "$f" .qml)
+    if grep -q '^pragma Singleton' "$f"; then echo "singleton $name 1.0 $f"; else echo "$name 1.0 $f"; fi
+  done
+} > qmldir

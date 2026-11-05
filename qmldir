@@ -1,0 +1,10 @@
+Chip 1.0 components/Chip.qml
+IconButton 1.0 components/IconButton.qml
+Icon 1.0 components/Icon.qml
+Label 1.0 components/Label.qml
+Rounded 1.0 components/Rounded.qml
+singleton Store 1.0 core/Store.qml
+singleton Tk 1.0 core/Tk.qml
+Deck 1.0 Deck.qml
+singleton Palettes 1.0 services/Palettes.qml
+singleton Walls 1.0 services/Walls.qml
