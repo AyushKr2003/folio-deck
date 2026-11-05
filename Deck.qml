@@ -16,10 +16,12 @@ import "core/Palette.js" as Palette
 // click anywhere else, puts the one you had back.
 //
 // Open it with `omarchy-shell shell toggle folio.deck` (payload, optional:
-// {"source": "theme|all|folder"}). It works under any bar.
+// {"mode": "wallpaper|theme", "source": "theme|all|folder"}). It works under any bar.
 //
 // Keys: ←→ or the wheel browse, Home/End, PgUp/PgDn, Enter keep,
-// S sort (name, colour, newest), R random, Tab source, Esc put back.
+// S sort (name, colour, newest), R random, Tab source, T wallpapers/themes,
+// Esc put back. In theme mode the cards are Omarchy themes (preview picture
+// and colour chips); Enter applies one with `omarchy-theme-set`.
 Item {
   id: root
 
@@ -35,6 +37,8 @@ Item {
     var args = {}
     try { args = JSON.parse(payload || "{}") || {} } catch (e) {}
     deck.sort = Store.get("sort")
+    deck.mode = ["wallpaper", "theme"].indexOf(args.mode) >= 0 ? args.mode : Store.get("mode")
+    deck.themeTurned = false
     deck.source = ["theme", "all", "folder"].indexOf(args.source) >= 0 ? args.source : Store.get("source")
     var m = Hyprland.focusedMonitor
     var name = m && m.name ? m.name : ""
@@ -47,6 +51,14 @@ Item {
   // For scripts and tests, through the host:
   //   omarchy-shell shell call folio.deck step 1|-1   browse
   //   omarchy-shell shell call folio.deck keep ""      keep the card in front
+  //   omarchy-shell shell call folio.deck wallpapers ""   open (or switch) to wallpapers
+  //   omarchy-shell shell call folio.deck themes ""       open (or switch) to themes
+  function wallpapers() { return enter("wallpaper") }
+  function themes() { return enter("theme") }
+  function enter(m) {
+    if (opened) deck.setMode(m); else open(JSON.stringify({ mode: m }))
+    return "ok"
+  }
   function step(n) { deck.goTo(deck.target + (Number(n) || 1)); return "ok" }
   function keep() { deck.keep(); return "ok" }
 
@@ -81,6 +93,9 @@ Item {
     // ── what's in the deck ──
     // Read from Store when the deck opens, written back as they change (a
     // binding to Store here would loop through its own writes).
+    property string mode: "wallpaper"  // wallpaper | theme
+    readonly property bool themes: mode === "theme"
+    property bool themeTurned: false
     property string source: "theme"     // theme | all | folder
     property string sort: "name"        // name | colour | newest
     onSortChanged: if (open) Store.set("sort", sort)
@@ -88,6 +103,14 @@ Item {
 
     readonly property var list: {
       Palettes.revision
+      if (themes) {
+        var t = Themes.names.slice()
+        var td = function(n) { return Themes.get(n) || {} }
+        if (sort === "name") t.sort()
+        else if (sort === "newest") t.sort(function(a, b) { return (td(b).mtime || 0) - (td(a).mtime || 0) })
+        else t.sort(function(a, b) { return ((td(a).roles || {}).hue || 1000) - ((td(b).roles || {}).hue || 1000) })
+        return t
+      }
       var f = Walls.files.slice()
       var name = function(p) { return p.substring(p.lastIndexOf("/") + 1).toLowerCase() }
       if (sort === "name") f.sort(function(a, b) { return name(a) < name(b) ? -1 : name(a) > name(b) ? 1 : 0 })
@@ -104,10 +127,27 @@ Item {
     readonly property string front: count ? list[Math.max(0, Math.min(count - 1, target))] : ""
     readonly property int reach: 12
 
-    function nameOf(p) { return p.substring(p.lastIndexOf("/") + 1).replace(/\.[^.]+$/, "") }
+    // The card in use: the wallpaper (or theme) the deck would put back.
+    readonly property string inUse: themes ? Themes.current : original
+    function nameOf(p) { if (themes) return Themes.titleOf(p); return p.substring(p.lastIndexOf("/") + 1).replace(/\.[^.]+$/, "") }
     function sourceDirs() { Walls.source = source }
 
-    onOpenChanged: if (open) { sourceDirs(); Walls.scan(); keys.forceActiveFocus() }
+    onOpenChanged: if (open) { sourceDirs(); Walls.scan(); Themes.scan(); keys.forceActiveFocus() }
+
+    // T flips between wallpapers and themes. Leaving the wallpapers puts the
+    // original back first; coming back turns to the one in use.
+    function setMode(m) {
+      if (m === mode) return
+      previewLater.stop()
+      if (!themes && !kept && previewing && original && previewing !== original)
+        Quickshell.execDetached(["omarchy-shell", "-q", "background", "set", original])
+      previewing = original
+      mode = m
+      Store.set("mode", m)
+      var at = list.indexOf(m === "theme" ? Themes.current : original)
+      goTo(at >= 0 ? at : 0, true)
+      askPalettes()
+    }
 
     // ── live preview on the real background ──
     property string original: ""       // the wallpaper when the deck opened
@@ -121,7 +161,7 @@ Item {
     // binding may not have caught up yet.
     function preview() {
       var f = count ? list[Math.max(0, Math.min(count - 1, target))] : ""
-      if (!open || !settled || !f || Walls.isVideo(f) || f === previewing) return
+      if (themes || !open || !settled || !f || Walls.isVideo(f) || f === previewing) return
       previewing = f
       previewLater.restart()
     }
@@ -141,7 +181,7 @@ Item {
       kept = true
       previewLater.stop()
       previewing = ""
-      Walls.set(front)
+      if (themes) Themes.set(front); else Walls.set(front)
       root.opened = false
     }
 
@@ -154,10 +194,22 @@ Item {
         if (!deck.open || deck.settled) return
         deck.original = Walls.current
         deck.previewing = Walls.current
-        var at = deck.list.indexOf(Walls.current)
-        deck.goTo(at >= 0 ? at : 0, true)
+        if (!deck.themes) {
+          var at = deck.list.indexOf(Walls.current)
+          deck.goTo(at >= 0 ? at : 0, true)
+        }
         deck.settled = true
         deck.askPalettes()
+      }
+    }
+    // Likewise the theme scan turns to the theme in use, once.
+    Connections {
+      target: Themes
+      function onScanned() {
+        if (!deck.open || !deck.themes || deck.themeTurned) return
+        deck.themeTurned = true
+        var at = deck.list.indexOf(Themes.current)
+        deck.goTo(at >= 0 ? at : 0, true)
       }
     }
     // A re-sort or a new source keeps the card in front.
@@ -172,7 +224,7 @@ Item {
 
     // Palettes: the cards in hand first, then the rest when sorting by colour.
     function askPalettes() {
-      if (!open || !count) return
+      if (!open || !count || themes) return
       var order = []
       for (var d = 0; d <= Math.max(reach + 4, sort === "colour" ? count : 0); d++) {
         if (target + d < count) order.push(list[target + d])
@@ -223,8 +275,9 @@ Item {
           readonly property bool inHand: Math.abs(d) <= deck.reach + 1
           readonly property bool isFront: index === deck.target
           readonly property real ang: d * hand.step
-          readonly property var roles: inHand ? Palettes.rolesOf(file) : null
-          readonly property var info: inHand ? Palettes.info(file) : null
+          readonly property var roles: inHand ? (deck.themes ? Themes.rolesOf(file) : Palettes.rolesOf(file)) : null
+          readonly property var info: inHand && !deck.themes ? Palettes.info(file) : null
+          readonly property var theme: inHand && deck.themes ? Themes.get(file) : null
           readonly property real lift: isFront ? Tk.px(10) : Math.max(0, 1 - Math.abs(d)) * Tk.px(10)
           visible: inHand
           z: 100 - Math.abs(d)
@@ -248,12 +301,12 @@ Item {
               radius: Math.max(0, Tk.radius - Tk.px(4))
               Image {
                 anchors.fill: parent
-                source: card.inHand && !Walls.isVideo(card.file) ? "file://" + card.file : ""
+                source: !card.inHand ? "" : deck.themes ? (Themes.previewOf(card.file) ? "file://" + Themes.previewOf(card.file) : "") : !Walls.isVideo(card.file) ? "file://" + card.file : ""
                 fillMode: Image.PreserveAspectCrop
                 asynchronous: true
                 sourceSize.width: 424; sourceSize.height: 300
               }
-              Icon { anchors.centerIn: parent; visible: Walls.isVideo(card.file); name: "movie"; size: Tk.px(40); color: Tk.dim }
+              Icon { anchors.centerIn: parent; visible: !deck.themes && Walls.isVideo(card.file); name: "movie"; size: Tk.px(40); color: Tk.dim }
             }
             Rounded {
               x: hand.pad; y: pic.y + pic.height + Tk.s2
@@ -294,7 +347,7 @@ Item {
               Label { width: parent.width; text: deck.nameOf(card.file); font.weight: Font.Bold; font.pixelSize: Tk.fsLarge }
               Label {
                 width: parent.width
-                text: card.info ? (card.info.fmt + "  ·  " + card.info.w + " × " + card.info.h + "  ·  " + Palette.humanSize(card.info.size)) : "reading…"
+                text: deck.themes ? (card.theme ? card.theme.mode + "  ·  " + card.theme.origin : "reading…") : card.info ? (card.info.fmt + "  ·  " + card.info.w + " × " + card.info.h + "  ·  " + Palette.humanSize(card.info.size)) : "reading…"
                 color: Tk.dim; font.pixelSize: Tk.fsCaption
               }
             }
@@ -315,7 +368,7 @@ Item {
             border.color: card.isFront ? (card.roles ? card.roles.primary : Tk.accent) : Tk.alpha(Tk.fg, 0.18)
           }
           Rectangle {
-            visible: card.file === deck.original
+            visible: card.file === deck.inUse
             x: Tk.s2; y: Tk.s2
             width: cur.implicitWidth + Tk.s3; height: Tk.px(20); radius: Tk.pill(height)
             color: Tk.alpha(Tk.bg, 0.85)
@@ -335,7 +388,7 @@ Item {
     Label {
       anchors.centerIn: parent
       visible: deck.count === 0 && deck.open
-      text: deck.source === "folder" ? "No pictures in " + Walls.folder + ". Press Tab for another source." : "No wallpapers here. Press Tab for another source."
+      text: deck.themes ? "No themes found. Press T for wallpapers." : deck.source === "folder" ? "No pictures in " + Walls.folder + ". Press Tab for another source." : "No wallpapers here. Press Tab for another source."
       color: Tk.fg
     }
 
@@ -354,7 +407,8 @@ Item {
         else if (k === Qt.Key_R) deck.goTo(Math.floor(Math.random() * deck.count))
         else if (k === Qt.Key_Return || k === Qt.Key_Enter) deck.keep()
         else if (k === Qt.Key_S) { var s = ["name", "colour", "newest"]; deck.sort = s[(s.indexOf(deck.sort) + 1) % 3] }
-        else if (k === Qt.Key_Tab) { var o = ["theme", "all", "folder"]; deck.source = o[(o.indexOf(deck.source) + 1) % 3] }
+        else if (k === Qt.Key_T) deck.setMode(deck.themes ? "wallpaper" : "theme")
+        else if (k === Qt.Key_Tab) { if (!deck.themes) { var o = ["theme", "all", "folder"]; deck.source = o[(o.indexOf(deck.source) + 1) % 3] } }
         else return
         e.accepted = true
       }

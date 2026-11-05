@@ -13,7 +13,7 @@ Singleton {
   readonly property string cacheDir: (Quickshell.env("XDG_CACHE_HOME") || home + "/.cache") + "/folio-deck"
   property var doc: ({})
   property int revision: 0
-  readonly property var defaults: ({ favourites: [], source: "theme", sort: "name", folder: home + "/Pictures/Wallpapers" })
+  readonly property var defaults: ({ favourites: [], mode: "wallpaper", source: "theme", sort: "name", folder: home + "/Pictures/Wallpapers" })
   function get(k) { revision; return doc[k] !== undefined ? doc[k] : defaults[k] }
   function set(k, v) { var n = Object.assign({}, doc); n[k] = v; doc = n; revision++; saver.restart() }
   Component.onCompleted: Quickshell.execDetached(["mkdir", "-p", dir, cacheDir])
