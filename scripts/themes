@@ -39,6 +39,15 @@ for n in sorted(themes):
         with open(toml, "rb") as f: c = tomllib.load(f)
     except Exception: continue
     preview = next((p for p in (os.path.join(x, f) for x in (d, base) for f in ("preview.png", "preview.jpg", "preview.jpeg", "preview.webp")) if os.path.isfile(p)), "")
+    # Its wallpapers: your own for it, then the theme's (a user copy's, else
+    # the built-in one's). Pictures only; the card can't show a video.
+    pics, seen = [], set()
+    for bd in (home + "/.config/omarchy/backgrounds/" + n, d + "/backgrounds", base + "/backgrounds"):
+        try: fs = sorted(os.listdir(bd))
+        except OSError: continue
+        for f in fs:
+            if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")) and f not in seen:
+                seen.add(f); pics.append(os.path.join(bd, f))
     accent = c.get("accent") or c.get("blue") or "#888888"
     pool = [c[k] for k in ("blue", "magenta", "cyan", "green", "orange", "yellow", "red") if k in c]
     far = sorted(pool, key=lambda x: -gap(hue(x), hue(accent)))
@@ -46,7 +55,7 @@ for n in sorted(themes):
     tertiary = next((x for x in far if x != secondary and x.lower() != accent.lower()), secondary)
     surface = c.get("background", "#000000")
     print(json.dumps({
-        "id": n, "title": n.replace("-", " ").title(), "dir": d, "preview": preview,
+        "id": n, "title": n.replace("-", " ").title(), "dir": d, "preview": preview, "backgrounds": pics,
         "mode": c.get("mode", "dark"), "origin": origin,
         "mtime": int(os.path.getmtime(d)),
         "roles": {"primary": accent.upper(), "secondary": secondary.upper(), "tertiary": tertiary.upper(),

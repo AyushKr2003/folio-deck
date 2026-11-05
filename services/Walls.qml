@@ -6,7 +6,9 @@ import ".."
 
 // Wallpapers for Folio Deck, Omarchy's way: the current theme's backgrounds (yours in
 // ~/.config/omarchy/backgrounds/<theme>/ and the theme's own), every
-// installed theme's, or a folder of your own (the "folder" setting).
+// installed theme's (the current one's read from its live copy in
+// ~/.local/state/omarchy/current/theme, where the in-use wallpaper points,
+// so the deck finds it), or a folder of your own (the "folder" setting).
 // Setting one runs `omarchy theme bg set`, which also plays Omarchy's
 // transition. Favourites are kept in Folio Deck's settings.
 Singleton {
@@ -32,7 +34,11 @@ Singleton {
     current = f
     Quickshell.execDetached(["omarchy-theme-bg-set", f])
   }
-  function scan() { proc.running = false; proc.running = true }
+  // A scan asked for while one runs waits for it, rather than killing it:
+  // a killed run can still hand over a partial list, and the deck would
+  // settle on that (missing the card in use).
+  property bool again: false
+  function scan() { if (proc.running) again = true; else proc.running = true }
   onSourceChanged: scan()
   Component.onCompleted: scan()
   onFolderChanged: if (source === "folder") scan()
@@ -40,14 +46,17 @@ Singleton {
   readonly property string script:
     "st=$HOME/.local/state/omarchy/current; t=$(cat $st/theme.name 2>/dev/null); echo \"#theme $t\"; echo \"#current $(readlink -f $st/background)\";" +
     "case $1 in theme) d=(\"$HOME/.config/omarchy/backgrounds/$t\" \"$st/theme/backgrounds\");;" +
-    " all) d=(\"$HOME\"/.config/omarchy/backgrounds/* \"$OMARCHY_PATH\"/themes/*/backgrounds \"$HOME\"/.config/omarchy/themes/*/backgrounds);;" +
+    " all) d=(\"$HOME\"/.config/omarchy/backgrounds/* \"$st/theme/backgrounds\");" +
+    "  for x in \"$OMARCHY_PATH\"/themes/*/backgrounds \"$HOME\"/.config/omarchy/themes/*/backgrounds; do [[ $x == */themes/$t/backgrounds ]] || d+=(\"$x\"); done;;" +
     " folder) d=(\"$2\");; esac;" +
     "find -L \"${d[@]}\" -maxdepth 1 -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' -o -iname '*.gif' -o -iname '*.bmp' -o -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' \\) -printf '%T@\\t%s\\t%p\\n' 2>/dev/null | sort -t$'\\t' -k3 -u | head -2000"
   Process {
     id: proc
     command: ["bash", "-c", root.script, "_", root.source, root.folder]
+    onExited: if (root.again) { root.again = false; running = true }
     stdout: StdioCollector {
       onStreamFinished: {
+        if (root.again) return
         var out = [], meta = {}
         String(text).split("\n").forEach(function(l) {
           if (l.indexOf("#theme ") === 0) root.themeName = l.slice(7)

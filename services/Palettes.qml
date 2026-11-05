@@ -25,7 +25,9 @@ Singleton {
   function want(paths, mtimeOf) {
     var q = []
     for (var i = 0; i < paths.length; i++) {
-      var p = paths[i], m = mtimeOf ? mtimeOf(p) : 0
+      var p = paths[i]
+      if (!p) continue
+      var m = mtimeOf ? mtimeOf(p) : 0
       mtimes[p] = m
       var c = cache[p]
       if (!c || (m && c.mtime !== m)) q.push(p)
@@ -39,6 +41,7 @@ Singleton {
     for (var i = 0; i < workers.length && queue.length; i++) {
       if (workers[i].running) continue
       var next = queue.shift()
+      if (!next) { i--; continue }
       workers[i].file = next
       workers[i].command = [root.script, next]
       workers[i].running = true

@@ -13,25 +13,37 @@ Singleton {
   // Emitted when a scan has filled names, data and current.
   signal scanned()
   property var names: []
-  property var data: ({})            // id -> { title, preview, mode, origin, mtime, roles }
+  property var data: ({})            // id -> { title, preview, backgrounds, mode, origin, mtime, roles }
   property string current: ""
 
   function get(id) { return data[id] || null }
   function rolesOf(id) { var t = get(id); return t ? t.roles : null }
   function previewOf(id) { var t = get(id); return t ? t.preview : "" }
+  // What the card shows: the preview, then each of the theme's wallpapers.
+  function picturesOf(id) {
+    var t = get(id)
+    if (!t) return []
+    return (t.preview ? [t.preview] : []).concat(t.backgrounds || [])
+  }
   function titleOf(id) { var t = get(id); return t ? t.title : id }
   function set(id) {
     current = id
     Quickshell.execDetached(["omarchy-theme-set", id])
   }
-  function scan() { proc.running = false; proc.running = true }
+  // A scan asked for while one runs waits for it, rather than killing it:
+  // a killed run can still hand over a partial list, and the deck would
+  // settle on that (missing the card in use).
+  property bool again: false
+  function scan() { if (proc.running) again = true; else proc.running = true }
   Component.onCompleted: scan()
 
   Process {
     id: proc
     command: [root.script]
+    onExited: if (root.again) { root.again = false; running = true }
     stdout: StdioCollector {
       onStreamFinished: {
+        if (root.again) return
         var names = [], data = {}
         String(text).split("\n").forEach(function(l) {
           if (l.indexOf("#current ") === 0) root.current = l.slice(9)

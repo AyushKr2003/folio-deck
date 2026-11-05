@@ -3,6 +3,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Wayland
 import Quickshell.Hyprland
+import Quickshell.Io
 import "core/Palette.js" as Palette
 
 // Folio Deck · entry point of the `folio.deck` overlay plugin.
@@ -34,8 +35,20 @@ Item {
   property bool opened: false
 
   function open(payload) {
+    // JSON ({"mode": "theme", "source": "all"}) or one bare word: a mode
+    // (theme(s), wallpaper(s)) or a source (theme, all, folder needs JSON).
     var args = {}
-    try { args = JSON.parse(payload || "{}") || {} } catch (e) {}
+    var word = String(payload || "").trim().toLowerCase().replace(/^"|"$/g, "")
+    if (/^themes?$/.test(word)) args = { mode: "theme" }
+    else if (/^wallpapers?$|^walls?$/.test(word)) args = { mode: "wallpaper" }
+    else if (word === "all" || word === "folder") args = { mode: "wallpaper", source: word }
+    else try { args = JSON.parse(payload || "{}") || {} } catch (e) {}
+    if (typeof args !== "object" || args === null) args = {}
+    // Unsettle first: the mode and source below change the list, and a
+    // settled deck would try to keep the last session's card in front.
+    deck.settled = false
+    deck.kept = false
+    deck.original = ""
     deck.sort = Store.get("sort")
     deck.mode = ["wallpaper", "theme"].indexOf(args.mode) >= 0 ? args.mode : Store.get("mode")
     deck.themeTurned = false
@@ -43,9 +56,6 @@ Item {
     var m = Hyprland.focusedMonitor
     var name = m && m.name ? m.name : ""
     for (var i = 0; i < Quickshell.screens.length; i++) if (Quickshell.screens[i].name === name) deck.screen = Quickshell.screens[i]
-    deck.original = ""
-    deck.settled = false
-    deck.kept = false
     opened = true
   }
   // For scripts and tests, through the host:
@@ -61,6 +71,28 @@ Item {
   }
   function step(n) { deck.goTo(deck.target + (Number(n) || 1)); return "ok" }
   function keep() { deck.keep(); return "ok" }
+
+  // Its own IPC target, so no host `call` (which wants a third argument):
+  //   omarchy-shell folio-deck wallpapers   open on wallpapers (again: close)
+  //   omarchy-shell folio-deck themes       open on themes (again: close)
+  //   omarchy-shell folio-deck toggle | close | keep | step <n> | mode | front
+  // From the other mode, wallpapers/themes switch the open deck over.
+  IpcHandler {
+    target: "folio-deck"
+    function wallpapers(): string { return root.flip("wallpaper") }
+    function themes(): string { return root.flip("theme") }
+    function toggle(): string { if (root.opened) root.close(); else root.open(""); return root.opened ? "open" : "closed" }
+    function close(): string { root.close(); return "closed" }
+    function keep(): string { return root.keep() }
+    function step(n: int): string { return root.step(n) }
+    function mode(): string { return root.opened ? deck.mode : "closed" }
+    function front(): string { return root.opened ? deck.front : "" }
+  }
+  function flip(m) {
+    if (opened && deck.mode === m) { close(); return "closed" }
+    enter(m)
+    return m
+  }
 
   // Closing without keeping puts the wallpaper you had back.
   function close() {
@@ -217,15 +249,16 @@ Item {
       if (settled) {
         var i = list.indexOf(_frontBefore)
         goTo(i >= 0 ? i : Math.min(target, count - 1), true)
-      }
+      } else if (target > count - 1) goTo(count - 1, true)   // never past the end
       askPalettes()
     }
-    onTargetChanged: { _frontBefore = count ? list[Math.max(0, Math.min(count - 1, target))] : ""; askPalettes(); preview() }
+    onTargetChanged: { askPalettes(); preview() }
 
     // Palettes: the cards in hand first, then the rest when sorting by colour.
     function askPalettes() {
       if (!open || !count || themes) return
       var order = []
+      var target = Math.max(0, Math.min(count - 1, deck.target))
       for (var d = 0; d <= Math.max(reach + 4, sort === "colour" ? count : 0); d++) {
         if (target + d < count) order.push(list[target + d])
         if (d && target - d >= 0) order.push(list[target - d])
@@ -236,6 +269,9 @@ Item {
 
     function goTo(i, instant) {
       target = Math.max(0, Math.min(count - 1, i))
+      // Remembered here, not on targetChanged: a new list can leave the
+      // index as it was while the card there changes.
+      _frontBefore = count ? list[target] : ""
       if (instant) { turn.stop(); position = target } else { turn.from = position; turn.to = target; turn.restart() }
     }
     NumberAnimation { id: turn; target: deck; property: "position"; duration: Tk.ms(280); easing.type: Easing.OutCubic }
@@ -301,10 +337,58 @@ Item {
               radius: Math.max(0, Tk.radius - Tk.px(4))
               Image {
                 anchors.fill: parent
-                source: !card.inHand ? "" : deck.themes ? (Themes.previewOf(card.file) ? "file://" + Themes.previewOf(card.file) : "") : !Walls.isVideo(card.file) ? "file://" + card.file : ""
+                visible: !deck.themes
+                source: !card.inHand || deck.themes || Walls.isVideo(card.file) ? "" : "file://" + card.file
                 fillMode: Image.PreserveAspectCrop
                 asynchronous: true
                 sourceSize.width: 424; sourceSize.height: 300
+              }
+              // A theme card cycles through its preview and every wallpaper
+              // the theme has, crossfading; each card at its own pace, so the
+              // hand doesn't change all at once.
+              Item {
+                id: slides
+                anchors.fill: parent
+                visible: deck.themes
+                readonly property var pics: card.inHand && deck.themes ? Themes.picturesOf(card.file) : []
+                readonly property bool cycling: card.inHand && deck.open && pics.length > 1
+                property int at: 0
+                property bool flip: false        // which of the two images is on top
+                onCyclingChanged: reset()
+                onPicsChanged: reset()
+                function reset() { at = 0; flip = false; slideB.source = ""; slideA.source = pics.length ? "file://" + pics[0] : "" }
+                // Load the next picture into the hidden image; it comes up
+                // once loaded (onStatusChanged below).
+                function advance() {
+                  at = (at + 1) % pics.length
+                  ;(flip ? slideA : slideB).source = "file://" + pics[at]
+                }
+                Timer { interval: 2600 + (card.index % 7) * 170; repeat: true; running: slides.cycling; onTriggered: slides.advance() }
+                component Slide: Image {
+                  anchors.fill: parent
+                  fillMode: Image.PreserveAspectCrop
+                  asynchronous: true
+                  sourceSize.width: 424; sourceSize.height: 300
+                  Behavior on opacity { NumberAnimation { duration: Tk.ms(450); easing.type: Easing.InOutQuad } }
+                }
+                // The next slide fades in only once it has loaded.
+                Slide { id: slideA; opacity: !slides.flip ? 1 : 0; onStatusChanged: if (status === Image.Ready && slides.flip) slides.flip = false }
+                Slide { id: slideB; opacity: slides.flip ? 1 : 0; onStatusChanged: if (status === Image.Ready && !slides.flip && source != "") slides.flip = true }
+                // Which picture is up: one dot each, the preview first.
+                Row {
+                  visible: slides.cycling
+                  anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; anchors.bottomMargin: Tk.px(6)
+                  spacing: Tk.px(4)
+                  Repeater {
+                    model: slides.pics.length
+                    Rectangle {
+                      required property int index
+                      width: index === slides.at ? Tk.px(12) : Tk.px(5); height: Tk.px(5); radius: height / 2
+                      color: Qt.rgba(0.96, 0.96, 0.96, index === slides.at ? 1 : 0.5)
+                      Behavior on width { NumberAnimation { duration: Tk.ms(200) } }
+                    }
+                  }
+                }
               }
               Icon { anchors.centerIn: parent; visible: !deck.themes && Walls.isVideo(card.file); name: "movie"; size: Tk.px(40); color: Tk.dim }
             }
@@ -320,7 +404,7 @@ Item {
                   required property var modelData
                   readonly property color chip: card.roles ? card.roles[modelData[1]] : Tk.alpha(Tk.fg, 0.07)
                   readonly property color ink: Tk.luminance(chip) > 0.55 ? "#141414" : "#f4f4f4"
-                  width: parent.width; height: Tk.px(23)
+                  width: parent ? parent.width : 0; height: Tk.px(23)
                   color: chip
                   Text {
                     x: Tk.s3; anchors.verticalCenter: parent.verticalCenter
