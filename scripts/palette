@@ -2,11 +2,14 @@
 # Prints one JSON line describing a wallpaper for the deck's paint-chip
 # cards: its size, format, file size and its 8 most common colours with
 # their share. Videos are read from a thumbnail of their first seconds.
-#   scripts/palette FILE
+# With THUMB, also writes a small JPEG of it there (for the cards and the
+# preview's first frame: decoding a 6000-pixel picture per card is slow).
+#   scripts/palette FILE [THUMB]
 # Omarchy has no palette extractor (its colours come from the theme, not the
 # wallpaper), so this uses ImageMagick, which Omarchy ships.
 set -uo pipefail
 f=$1
+thumb=${2:-}
 [[ -r $f ]] || exit 1
 src=$f
 tmp=
@@ -21,7 +24,12 @@ dims=$(magick identify -format "%w %h %m" "$src[0]" 2>/dev/null | head -1)
 read -r w h fmt <<<"$dims"
 [[ -n $tmp ]] && { w=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=' ' "$f" 2>/dev/null | head -1); h=${w#* }; w=${w% *}; fmt=${f##*.}; fmt=${fmt^^}; }
 size=$(stat -c %s "$f")
+if [[ -n $thumb ]]; then
+  mkdir -p "$(dirname "$thumb")"
+  nice -n 15 magick "$src[0]" -auto-orient -thumbnail '640x400^' -quality 86 "$thumb" 2>/dev/null || thumb=
+fi
 colors=$(nice -n 15 magick "$src[0]" -resize 96x96 -colors 8 -format "%c" histogram:info:- 2>/dev/null \
   | sort -rn | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^#[0-9A-Fa-f]{6}/) { printf "%s[\"%s\",%d]", (n++ ? "," : ""), substr($i, 1, 7), $1 + 0 } }')
-printf '{"file":"%s","w":%s,"h":%s,"fmt":"%s","size":%s,"colors":[%s]}\n' \
-  "$(printf '%s' "$f" | sed 's/\\/\\\\/g; s/"/\\"/g')" "${w:-0}" "${h:-0}" "${fmt:-?}" "${size:-0}" "$colors"
+esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+printf '{"file":"%s","thumb":"%s","w":%s,"h":%s,"fmt":"%s","size":%s,"colors":[%s]}\n' \
+  "$(esc "$f")" "$(esc "$thumb")" "${w:-0}" "${h:-0}" "${fmt:-?}" "${size:-0}" "$colors"

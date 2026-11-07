@@ -8,12 +8,13 @@ import ".."
 // ~/.config/omarchy/backgrounds/<theme>/ and the theme's own), every
 // installed theme's (the current one's read from its live copy in
 // ~/.local/state/omarchy/current/theme, where the in-use wallpaper points,
-// so the deck finds it), or a folder of your own (the "folder" setting).
+// so the deck finds it), or a folder of your own (the "folder" setting);
+// "favourites" lists all of those, for the deck to keep the hearted ones.
 // Setting one runs `omarchy theme bg set`, which also plays Omarchy's
 // transition. Favourites are kept in Folio Deck's settings.
 Singleton {
   id: root
-  property string source: "theme"          // theme | all | folder
+  property string source: "theme"          // theme | all | folder | favourites
   // Emitted when a scan has filled files, meta, current and themeName.
   signal scanned()
   property var files: []
@@ -38,27 +39,38 @@ Singleton {
   // a killed run can still hand over a partial list, and the deck would
   // settle on that (missing the card in use).
   property bool again: false
-  function scan() { if (proc.running) again = true; else proc.running = true }
+  function scan() { if (proc.running) again = true; else start() }
+  // The command is built here, not bound: from onSourceChanged a binding may
+  // not have caught up yet, and the scan would list the source just left.
+  function start() {
+    proc.command = ["bash", "-c", root.script, "_", root.source, root.folder]
+    proc.running = true
+  }
   onSourceChanged: scan()
   Component.onCompleted: scan()
-  onFolderChanged: if (source === "folder") scan()
+  onFolderChanged: if (source === "folder" || source === "favourites") scan()
 
   readonly property string script:
-    "st=$HOME/.local/state/omarchy/current; t=$(cat $st/theme.name 2>/dev/null); echo \"#theme $t\"; echo \"#current $(readlink -f $st/background)\";" +
+    "echo \"#for $1\"; st=$HOME/.local/state/omarchy/current; t=$(cat $st/theme.name 2>/dev/null); echo \"#theme $t\"; echo \"#current $(readlink -f $st/background)\";" +
     "case $1 in theme) d=(\"$HOME/.config/omarchy/backgrounds/$t\" \"$st/theme/backgrounds\");;" +
     " all) d=(\"$HOME\"/.config/omarchy/backgrounds/* \"$st/theme/backgrounds\");" +
     "  for x in \"$OMARCHY_PATH\"/themes/*/backgrounds \"$HOME\"/.config/omarchy/themes/*/backgrounds; do [[ $x == */themes/$t/backgrounds ]] || d+=(\"$x\"); done;;" +
-    " folder) d=(\"$2\");; esac;" +
+    " folder) d=(\"$2\");;" +
+    " favourites) d=(\"$HOME\"/.config/omarchy/backgrounds/* \"$st/theme/backgrounds\" \"$2\");" +
+    "  for x in \"$OMARCHY_PATH\"/themes/*/backgrounds \"$HOME\"/.config/omarchy/themes/*/backgrounds; do [[ $x == */themes/$t/backgrounds ]] || d+=(\"$x\"); done;; esac;" +
     "find -L \"${d[@]}\" -maxdepth 1 -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' -o -iname '*.gif' -o -iname '*.bmp' -o -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.mov' \\) -printf '%T@\\t%s\\t%p\\n' 2>/dev/null | sort -t$'\\t' -k3 -u | head -2000"
   Process {
     id: proc
-    command: ["bash", "-c", root.script, "_", root.source, root.folder]
-    onExited: if (root.again) { root.again = false; running = true }
+    onExited: if (root.again) { root.again = false; root.start() }
     stdout: StdioCollector {
       onStreamFinished: {
         if (root.again) return
+        // A run for a source since left (its rerun is on the way).
+        var lines = String(text).split("\n")
+        if (lines[0] !== "#for " + root.source) return
         var out = [], meta = {}
-        String(text).split("\n").forEach(function(l) {
+        lines.forEach(function(l) {
+          if (l.indexOf("#for ") === 0) return
           if (l.indexOf("#theme ") === 0) root.themeName = l.slice(7)
           else if (l.indexOf("#current ") === 0) root.current = l.slice(9)
           else if (l) {

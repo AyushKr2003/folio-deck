@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "author": "AyushKr2003",
   "license": "GPL-3.0-or-later",
-  "description": "A wallpaper picker of paint-chip cards: each wallpaper with its palette, held on an arc, the one in front previewed full screen. Works with any bar.",
+  "description": "A wallpaper and theme picker of paint-chip cards: each one dressed in its own palette, held on an arc, the one in front previewed full screen. Works with any bar.",
   "kinds": ["overlay"],
   "keepLoaded": true,
   "entryPoints": {

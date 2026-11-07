@@ -1,8 +1,9 @@
-Chip 1.0 components/Chip.qml
-IconButton 1.0 components/IconButton.qml
+Backdrop 1.0 components/Backdrop.qml
 Icon 1.0 components/Icon.qml
-Label 1.0 components/Label.qml
+Ribbon 1.0 components/Ribbon.qml
 Rounded 1.0 components/Rounded.qml
+SettingsCard 1.0 components/SettingsCard.qml
+SwatchCard 1.0 components/SwatchCard.qml
 singleton Store 1.0 core/Store.qml
 singleton Tk 1.0 core/Tk.qml
 Deck 1.0 Deck.qml
