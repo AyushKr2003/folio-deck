@@ -82,14 +82,18 @@ Item {
     Behavior on color { ColorAnimation { duration: Tk.normal } }
 
     // ── The picture ──
-    Rounded {
+    // No offscreen layer (a layer is drawn flat, then rotated and scaled as
+    // a bitmap, which blurs the cards on the arc): the picture is drawn
+    // straight, and a frame in the card's colour rounds its corners.
+    Item {
       id: thumb
       x: card.pad; y: card.pad
       width: parent.width - card.pad * 2
       height: Math.round(width * 10 / 16)
-      radius: card.thumbRadius
+      // Only for the band of light, while the card is upright.
+      clip: card.shine > -0.5
 
-      Rectangle { anchors.fill: parent; color: card.cRaised }
+      Rectangle { anchors.fill: parent; color: card.cRaised; antialiasing: true; radius: card.thumbRadius }
       Icon {
         anchors.centerIn: parent
         visible: card.video || slideA.status !== Image.Ready && slideB.status !== Image.Ready
@@ -114,8 +118,12 @@ Item {
           fillMode: Image.PreserveAspectCrop
           asynchronous: true
           smooth: true
-          sourceSize.width: Math.ceil(thumb.width * 1.3)
-          sourceSize.height: Math.ceil(thumb.height * 1.3)
+          mipmap: true
+          antialiasing: true
+          // Twice the size shown: the front card is drawn larger, and a
+          // sharper source keeps the tilted cards crisp.
+          sourceSize.width: Math.ceil(thumb.width * 2)
+          sourceSize.height: Math.ceil(thumb.height * 2)
           Behavior on opacity { NumberAnimation { duration: Tk.ms(450); easing.type: Easing.InOutQuad } }
         }
         Slide { id: slideA; opacity: status === Image.Ready && !slides.flip ? 1 : 0; onStatusChanged: if (status === Image.Ready && slides.flip) slides.flip = false }
@@ -151,6 +159,20 @@ Item {
       }
     }
 
+    // Rounds the picture's corners: a frame in the card's own colour whose
+    // inside edge is the rounded corner.
+    Rectangle {
+      readonly property real bw: 6 * card.u
+      visible: card.thumbRadius > 0
+      x: thumb.x - bw; y: thumb.y - bw
+      width: thumb.width + bw * 2; height: thumb.height + bw * 2
+      radius: card.thumbRadius + bw
+      antialiasing: true
+      color: "transparent"
+      border.width: bw
+      border.color: card.cSurface
+    }
+
     // The wallpaper on screen now.
     Rectangle {
       id: currentTag
@@ -182,11 +204,10 @@ Item {
     }
 
     // ── The chips ──
-    Rounded {
+    Item {
       id: chipBox
       x: card.pad; y: thumb.y + thumb.height + 8 * card.u
       width: thumb.width; height: card.chipHeight * 5
-      radius: card.thumbRadius
       Column {
         anchors.fill: parent
         Repeater {
@@ -197,6 +218,12 @@ Item {
             required property int index
             readonly property string fill: card.roles ? card.roles[modelData[1]] : ""
             width: chipBox.width; height: card.chipHeight
+            antialiasing: true
+            // The strip's own rounded ends, on its first and last chip.
+            topLeftRadius: index === 0 ? card.thumbRadius : 0
+            topRightRadius: index === 0 ? card.thumbRadius : 0
+            bottomLeftRadius: index === 4 ? card.thumbRadius : 0
+            bottomRightRadius: index === 4 ? card.thumbRadius : 0
             color: fill ? fill : Qt.tint(card.cRaised, Qt.rgba(1, 1, 1, 0.02 + 0.025 * (4 - index)))
             Behavior on color { ColorAnimation { duration: Tk.normal } }
             Text {

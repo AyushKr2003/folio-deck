@@ -1,8 +1,11 @@
 import QtQuick
 import ".."
 
-// A Material Symbols Rounded glyph by name.
+// A Material Symbols Rounded glyph by name. Drawn from its curves: the
+// default distance-field text leaves streaks in filled glyphs (their
+// outlines overlap), and curves stay sharp on rotated and scaled cards.
 Text {
+  renderType: Text.CurveRendering
   property string name: ""
   property real size: Tk.icon
   property bool filled: false
