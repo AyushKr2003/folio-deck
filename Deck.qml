@@ -237,6 +237,7 @@ Item {
 
     // ── Opening and closing ──
     function begin(m, s) {
+      flushAfterClose()
       resetChoice()
       settled = false
       peekKept = false; peekHeld = false
@@ -395,8 +396,34 @@ Item {
       chosenSet = false
       chosen = p
       backdrop.show(previewOf(p), quickOf(p))
-      apply(p)
+      if (themes || dry) apply(p); else introCheck.ask(p)
       riseAnim.restart()
+    }
+    // A wallpaper with an intro clip is set only once the picker has gone,
+    // so the clip plays on a clear screen instead of behind the bloom; one
+    // without is set as the card leaves, as above.
+    property string afterClose: ""
+    // Its intro is on the way, or still being looked for.
+    readonly property bool waitsForIntro: afterClose !== "" || introCheck.path !== ""
+    function flushAfterClose() {
+      var p = afterClose
+      afterClose = ""
+      if (p) apply(p)
+    }
+    Process {
+      id: introCheck
+      property string path: ""
+      function ask(p) { path = p; command = ["omarchy-theme-bg-boot-intro", "--resolve-enabled", p]; running = true }
+      stdout: StdioCollector {
+        onStreamFinished: {
+          var p = introCheck.path
+          if (!p) return
+          introCheck.path = ""
+          if (!String(text).trim()) deck.apply(p)
+          else if (deck.visible) deck.afterClose = p
+          else deck.apply(p)
+        }
+      }
     }
     function slotOf(p) {
       for (var i = 0; i < hand.count; i++) {
@@ -406,7 +433,7 @@ Item {
       return null
     }
     function resetChoice() {
-      riseAnim.stop(); bloomAnim.stop(); leaveLater.stop()
+      riseAnim.stop(); bloomAnim.stop(); growAnim.stop(); leaveLater.stop()
       chosen = ""
       chosenSet = false
       hush = 0; spot = 0
@@ -420,9 +447,9 @@ Item {
     }
     ParallelAnimation {
       id: closeAnim
-      NumberAnimation { target: deck; property: "shown"; to: 0; duration: deck.choosing ? 340 : 240; easing.type: Easing.InCubic }
+      NumberAnimation { target: deck; property: "shown"; to: 0; duration: deck.waitsForIntro ? 700 : deck.choosing ? 340 : 240; easing.type: deck.waitsForIntro ? Easing.InOutQuad : Easing.InCubic }
       NumberAnimation { target: deck; property: "deal"; to: 0; duration: 220; easing.type: Easing.InCubic }
-      onFinished: { deck.visible = false; deck.resetChoice(); backdrop.show("") }
+      onFinished: { deck.visible = false; deck.resetChoice(); backdrop.show(""); deck.flushAfterClose() }
     }
     SequentialAnimation {
       id: shuffleAnim
@@ -450,7 +477,9 @@ Item {
     }
     // 2. Set: the tag pops, a ring goes out and light crosses the picture;
     // 3. the card falls away from round its picture, which grows into the
-    // wallpaper, and the picker goes.
+    // wallpaper, and the picker goes. A wallpaper with an intro skips the
+    // growing: the picker fades out onto the desktop as it is, which is
+    // where the clip starts from.
     SequentialAnimation {
       id: bloomAnim
       ScriptAction { script: { deck.chosenSet = true; chosenCard.popTag() } }
@@ -463,6 +492,10 @@ Item {
         }
       }
       PauseAnimation { duration: 100 }
+      onFinished: if (deck.waitsForIntro) root.close(); else growAnim.restart()
+    }
+    SequentialAnimation {
+      id: growAnim
       ParallelAnimation {
         NumberAnimation { target: flight; property: "fade"; to: 1; duration: 320; easing.type: Easing.OutQuad }
         NumberAnimation { target: flight; property: "glow"; to: 0; duration: 380; easing.type: Easing.OutQuad }
